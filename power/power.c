@@ -29,15 +29,6 @@
 #define UNUSED __attribute__((unused))
 
 #define SCALING_GOVERNOR_PATH "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
-#define BOOSTPULSE_INTERACTIVE "/sys/devices/system/cpu/cpufreq/interactive/boostpulse"
-#define NOTIFY_ON_MIGRATE "/dev/cpuctl/cpu.notify_on_migrate"
-
-struct cm_power_module {
-    struct power_module base;
-    pthread_mutex_t lock;
-    int boostpulse_fd;
-    int boostpulse_warned;
-};
 
 static char governor[20];
 
@@ -107,16 +98,21 @@ static int get_scaling_governor() {
     return 0;
 }
 
-static void cm_power_set_interactive(UNUSED struct power_module *module, UNUSED int on)
-{
-    //sysfs_write(NOTIFY_ON_MIGRATE, on ? "1" : "0");
-}
-
 static void configure_governor()
 {
-    //cm_power_set_interactive(NULL, 1);
-
-    if (strncmp(governor, "ondemand", 8) == 0) {
+    if (strncmp(governor, "badass", 6) == 0) {
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/up_threshold", "90");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/io_is_busy", "1");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/sampling_down_factor", "4");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/down_differential", "10");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/up_threshold_multi_core", "70");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/down_differential_multi_core", "3");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/optimal_freq", "918000");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/sync_freq", "1026000");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/up_threshold_any_cpu_load", "80");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/input_boost", "1026000");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/badass/sampling_rate", "50000");
+    } else if (strncmp(governor, "ondemand", 8) == 0) {
         sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/up_threshold", "90");
         sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/io_is_busy", "1");
         sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor", "4");
@@ -128,7 +124,6 @@ static void configure_governor()
         sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/up_threshold_any_cpu_load", "80");
         sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/input_boost", "1026000");
         sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/sampling_rate", "50000");
-
     } else if (strncmp(governor, "interactive", 11) == 0) {
         sysfs_write("/sys/devices/system/cpu/cpufreq/interactive/min_sample_time", "40000");
         sysfs_write("/sys/devices/system/cpu/cpufreq/interactive/hispeed_freq", "918000");
@@ -136,79 +131,33 @@ static void configure_governor()
         sysfs_write("/sys/devices/system/cpu/cpufreq/interactive/go_hispeed_load", "90");
         sysfs_write("/sys/devices/system/cpu/cpufreq/interactive/timer_rate", "30000");
         sysfs_write("/sys/devices/system/cpu/cpufreq/interactive/io_is_busy", "1");
+    } else if (strncmp(governor, "uberdemand", 10) == 0) {
+        sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/up_threshold", "90");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/io_is_busy", "1");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor", "4");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/down_differential", "10");
+        sysfs_write("/sys/devices/system/cpu/cpufreq/ondemand/sampling_rate", "50000");
     }
 }
 
-static int boostpulse_open(struct cm_power_module *cm)
+static void cm_power_set_interactive(UNUSED struct power_module *module, UNUSED int on)
 {
-    char buf[80];
-
-    pthread_mutex_lock(&cm->lock);
-
-    if (cm->boostpulse_fd < 0) {
-        if (get_scaling_governor() < 0) {
-            ALOGE("Can't read scaling governor.");
-            cm->boostpulse_warned = 1;
-        } else {
-            if (strncmp(governor, "interactive", 11) == 0)
-                cm->boostpulse_fd = open(BOOSTPULSE_INTERACTIVE, O_WRONLY);
-
-            if (cm->boostpulse_fd < 0 && !cm->boostpulse_warned) {
-                strerror_r(errno, buf, sizeof(buf));
-                ALOGV("Error opening boostpulse: %s\n", buf);
-                cm->boostpulse_warned = 1;
-            } else if (cm->boostpulse_fd > 0) {
-                ALOGD("Opened %s boostpulse interface", governor);
-            }
-
-        configure_governor();
-        }
-    }
-
-    pthread_mutex_unlock(&cm->lock);
-    return cm->boostpulse_fd;
+    get_scaling_governor();
+    configure_governor();
 }
 
-static void cm_power_hint(struct power_module *module, power_hint_t hint,
-                            void *data)
+static int boostpulse_open(UNUSED struct power_module *module)
 {
-    struct cm_power_module *cm = (struct cm_power_module *) module;
-    char buf[80];
-    int len;
-    int duration = 1;
+    get_scaling_governor();
+    configure_governor();
+    return 0;
+}
 
-    switch (hint) {
-#ifndef NO_TOUCH_BOOST
-    case POWER_HINT_INTERACTION:
-#endif
-    case POWER_HINT_LAUNCH_BOOST:
-    case POWER_HINT_CPU_BOOST:
-        if (boostpulse_open(cm) >= 0) {
-            if (data != NULL)
-                duration = (int) data;
-
-            snprintf(buf, sizeof(buf), "%d", duration);
-            len = write(cm->boostpulse_fd, buf, strlen(buf));
-
-            if (len < 0) {
-                strerror_r(errno, buf, sizeof(buf));
-                ALOGE("Error writing to boostpulse: %s\n", buf);
-
-                pthread_mutex_lock(&cm->lock);
-                close(cm->boostpulse_fd);
-                cm->boostpulse_fd = -1;
-                cm->boostpulse_warned = 0;
-                pthread_mutex_unlock(&cm->lock);
-            }
-        }
-        break;
-
-    case POWER_HINT_VSYNC:
-        break;
-
-    default:
-        break;
-    }
+static void cm_power_hint(UNUSED struct power_module *module, power_hint_t hint,
+                            UNUSED void *data)
+{
+    get_scaling_governor();
+    configure_governor();
 }
 
 static void cm_power_init(UNUSED struct power_module *module)
@@ -221,24 +170,17 @@ static struct hw_module_methods_t power_module_methods = {
     .open = NULL,
 };
 
-struct cm_power_module HAL_MODULE_INFO_SYM = {
-    .base = {
-        .common = {
-            .tag = HARDWARE_MODULE_TAG,
-            .module_api_version = POWER_MODULE_API_VERSION_0_2,
-            .hal_api_version = HARDWARE_HAL_API_VERSION,
-            .id = POWER_HARDWARE_MODULE_ID,
-            .name = "CM Power HAL",
-            .author = "The CyanogenMod Project",
-            .methods = &power_module_methods,
-        },
-
-       .init = cm_power_init,
-       .setInteractive = cm_power_set_interactive,
-       .powerHint = cm_power_hint,
+struct power_module HAL_MODULE_INFO_SYM = {
+    .common = {
+        .tag = HARDWARE_MODULE_TAG,
+        .module_api_version = POWER_MODULE_API_VERSION_0_2,
+        .hal_api_version = HARDWARE_HAL_API_VERSION,
+        .id = POWER_HARDWARE_MODULE_ID,
+        .name = "CM MSM8960 Power HAL",
+        .author = "The CyanogenMod Project",
+        .methods = &power_module_methods,
     },
-
-    .lock = PTHREAD_MUTEX_INITIALIZER,
-    .boostpulse_fd = -1,
-    .boostpulse_warned = 0,
+    .init = cm_power_init,
+    .powerHint = cm_power_hint,
+    .setInteractive = cm_power_set_interactive,
 };

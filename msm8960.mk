@@ -176,7 +176,7 @@ PRODUCT_BOOT_JARS += \
 
 # Power
 PRODUCT_PACKAGES += \
-    power.msm8960
+    power.d2
 
 # Ramdisk
 PRODUCT_PACKAGES += \
